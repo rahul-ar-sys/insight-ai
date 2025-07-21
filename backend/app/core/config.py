@@ -40,7 +40,7 @@ class Settings(BaseSettings):
         return f"redis://{self.redis_host}:{self.redis_port}/{self.redis_db}"
     
     # Vector Database Configuration
-    vector_db_type: str = "pinecone"  # or "weaviate"
+    vector_db_type: str = "chroma"  # or "pinecone", "weaviate" 
     pinecone_api_key: Optional[str] = None
     pinecone_environment: str = "us-west1-gcp"
     weaviate_url: Optional[str] = None

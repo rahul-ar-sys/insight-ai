@@ -145,7 +145,7 @@ def test_google_ai():
         
         print("🤖 Testing Google AI (Gemini)...")
         
-        genai.configure(api_key="AIzaSyDnVcMsUDUrn3JQSexBCE3EwZp4xOxInyc")
+        genai.configure(api_key="API_KEY_HERE")  # Replace with actual API key
         
         model = genai.GenerativeModel('gemini-2.0-flash')
         response = model.generate_content("Reply with exactly: 'AI Test Successful'")
