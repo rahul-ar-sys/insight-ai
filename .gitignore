@@ -1,6 +1,6 @@
-
 # Exclude frontend directory
 frontend/
+
 
 # Exclude logs
 app.log
