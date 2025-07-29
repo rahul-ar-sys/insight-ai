@@ -3,12 +3,12 @@ from sqlalchemy.orm import Session
 from typing import List, Dict, Any, Optional
 
 from ..core.database import get_db
-from ..core.auth import get_current_user
+from ..core.auth import get_current_user, verify_workspace_access
 from ..core.logging import logger
 from ..models.database import User, Workspace
 from ..services.reasoning_visualizer import reasoning_visualizer, ReasoningStepType, ConfidenceLevel
 
-router = APIRouter(prefix="/api/v1/reasoning", tags=["Reasoning Visualization"])
+router = APIRouter(prefix="/reasoning", tags=["Reasoning Visualization"])
 
 
 @router.get("/{workspace_id}/traces")
@@ -22,14 +22,7 @@ async def get_reasoning_traces(
     """Get reasoning traces for a workspace"""
     
     try:
-        # Verify workspace access
-        workspace = db.query(Workspace).filter(
-            Workspace.workspace_id == workspace_id,
-            Workspace.owner_id == current_user.user_id
-        ).first()
-        
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
+        await verify_workspace_access(workspace_id, current_user, db)
         
         traces = reasoning_visualizer.get_traces_for_workspace(
             workspace_id, 
@@ -79,14 +72,7 @@ async def get_reasoning_trace_details(
     """Get detailed information about a specific reasoning trace"""
     
     try:
-        # Verify workspace access
-        workspace = db.query(Workspace).filter(
-            Workspace.workspace_id == workspace_id,
-            Workspace.owner_id == current_user.user_id
-        ).first()
-        
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
+        await verify_workspace_access(workspace_id, current_user, db)
         
         trace = reasoning_visualizer.get_reasoning_trace(trace_id)
         if not trace:
@@ -118,14 +104,7 @@ async def get_reasoning_graph(
     """Get graph representation of reasoning process"""
     
     try:
-        # Verify workspace access
-        workspace = db.query(Workspace).filter(
-            Workspace.workspace_id == workspace_id,
-            Workspace.owner_id == current_user.user_id
-        ).first()
-        
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
+        await verify_workspace_access(workspace_id, current_user, db)
         
         trace = reasoning_visualizer.get_reasoning_trace(trace_id)
         if not trace:
@@ -157,14 +136,7 @@ async def get_step_details(
     """Get detailed information about a specific reasoning step"""
     
     try:
-        # Verify workspace access
-        workspace = db.query(Workspace).filter(
-            Workspace.workspace_id == workspace_id,
-            Workspace.owner_id == current_user.user_id
-        ).first()
-        
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
+        await verify_workspace_access(workspace_id, current_user, db)
         
         trace = reasoning_visualizer.get_reasoning_trace(trace_id)
         if not trace:
@@ -196,14 +168,7 @@ async def get_reasoning_analytics(
     """Get analytics about reasoning patterns in the workspace"""
     
     try:
-        # Verify workspace access
-        workspace = db.query(Workspace).filter(
-            Workspace.workspace_id == workspace_id,
-            Workspace.owner_id == current_user.user_id
-        ).first()
-        
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
+        await verify_workspace_access(workspace_id, current_user, db)
         
         analytics = reasoning_visualizer.analyze_reasoning_patterns(workspace_id)
         
@@ -280,14 +245,7 @@ async def export_reasoning_trace(
     """Export reasoning trace in different formats"""
     
     try:
-        # Verify workspace access
-        workspace = db.query(Workspace).filter(
-            Workspace.workspace_id == workspace_id,
-            Workspace.owner_id == current_user.user_id
-        ).first()
-        
-        if not workspace:
-            raise HTTPException(status_code=404, detail="Workspace not found")
+        await verify_workspace_access(workspace_id, current_user, db)
         
         trace = reasoning_visualizer.get_reasoning_trace(trace_id)
         if not trace:

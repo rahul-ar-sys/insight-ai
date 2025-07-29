@@ -66,7 +66,7 @@ class Document(Base):
     original_name = Column(String(500), nullable=False)
     file_type = Column(String(50), nullable=False)
     file_size = Column(Integer, nullable=False)
-    storage_path = Column(String(1000), nullable=False)
+    storage_path = Column(String(1000), nullable=True)
     status = Column(String(50), default='processing')  # processing, ready, error
     error_message = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

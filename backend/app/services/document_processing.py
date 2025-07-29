@@ -19,49 +19,53 @@ import concurrent.futures
 import torch
 import time
 import json
+from pdf2image import convert_from_bytes 
+from ..core.logging import logger, log_agent_trace
 
 from ..core.config import settings
-from ..core.logging import logger, log_agent_trace
 from ..core.database import get_redis, SessionLocal
 from ..models.database import Document, DocumentChunk
 from ..models.document_status import DocumentStatus, ProcessingStep, ProcessingStepStatus
 from .storage import StorageService
 from .vector_store import VectorStoreService
 
+from ..dependencies import get_document_processing_service, get_vector_store_service
+
 
 class DocumentProcessingService:
     """Service for processing uploaded documents"""
     
-    def __init__(self):
+    def __init__(self, vector_service: VectorStoreService):
+        logger.info("Initializing DocumentProcessingService...")
         self.storage_service = StorageService()
-        self.vector_service = VectorStoreService()
-        self.redis = None # Initialize as None
+        self.vector_service = vector_service
+        self.redis = None
         self.embedding_model = None
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count())
-        self._load_embedding_model()
-    
+
     async def _get_redis_client(self):
         """Initializes the redis client if it's not already."""
         if self.redis is None:
             self.redis = await get_redis()
         return self.redis
 
-    def _load_embedding_model(self):
+    async def load_models(self):
+        """Asynchronously loads the embedding model. To be called at application startup."""
+        if self.embedding_model:
+            logger.info("Embedding model already loaded.")
+            return
+        await asyncio.to_thread(self._load_embedding_model_sync)
+
+    def _load_embedding_model_sync(self):
         """Load sentence transformer model for embeddings with optimizations"""
         try:
             model_name = settings.embedding_model
+            print(f"DEBUG: Attempting to load model from path: '{model_name}'")
             self.embedding_model = SentenceTransformer(model_name, device=self.device)
-            if self.device == "cuda":
-                try:
-                    self.embedding_model.half()
-                    logger.info(f"Loaded embedding model with GPU optimization: {model_name}")
-                except Exception as e:
-                    logger.warning(f"GPU optimization failed, using CPU: {e}")
-            else:
-                logger.info(f"Loaded embedding model on CPU: {model_name}")
+            logger.info(f"Loaded embedding model on {self.device}: {model_name}")
         except Exception as e:
-            logger.error(f"Failed to load embedding model: {e}")
+            logger.error(f"Failed to load embedding model: {e}", exc_info=True)
             self.embedding_model = None
 
     async def _update_document_status(self, document_id: UUID, status: DocumentStatus):
@@ -69,14 +73,53 @@ class DocumentProcessingService:
         try:
             redis_client = await self._get_redis_client()
             status_key = f"document_status:{document_id}"
-            await redis_client.set(status_key, status.json(), ex=3600) # Expire after 1 hour
+            await redis_client.set(status_key, status.json(), ex=3600)
         except Exception as e:
             logger.error(f"Failed to update document status in Redis for {document_id}: {e}")
 
-    async def process_document(self, document: Document, file_content: bytes, db_session_factory):
+    async def process_document_from_temp(self, document_id: UUID, temp_file_path: str, db_session_factory):
+        """
+        Reads a document from a temporary file path, stores it permanently,
+        and then processes it. Cleans up the temporary file afterward.
+        """
+        db = next(db_session_factory())
+        document = db.query(Document).filter(Document.document_id == document_id).first()
+        if not document:
+            logger.error(f"Document {document_id} not found for processing from temp file.")
+            db.close()
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            return
+
+        try:
+            async with aiofiles.open(temp_file_path, 'rb') as f:
+                file_content = await f.read()
+
+            storage_path = await self.storage_service.store_file(
+                file_content,
+                f"{document.workspace_id}/{document.document_id}_{document.original_name}"
+            )
+
+            document.storage_path = storage_path
+            db.commit()
+            db.refresh(document)
+
+            await self.process_document(document_id, file_content, db_session_factory)
+
+        finally:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+                logger.info(f"Cleaned up temporary file: {temp_file_path}")
+
+    async def process_document(self, document_id: UUID, file_content: bytes, db_session_factory):
         """Process uploaded document through the optimized pipeline"""
         
         db = next(db_session_factory())
+        document = db.query(Document).filter(Document.document_id == document_id).first()
+        if not document:
+            logger.error(f"Document {document_id} not found in database for background processing.")
+            db.close()
+            return
 
         status = DocumentStatus(
             document_id=document.document_id,
@@ -98,21 +141,22 @@ class DocumentProcessingService:
             log_agent_trace("document_processor", "start_processing", {"document_id": str(document.document_id), "file_type": document.file_type})
             logger.info(f"🚀 Starting optimized processing for document {document.document_id}")
 
-            # Step 1: Text Extraction
             status.steps[0].status = ProcessingStepStatus.IN_PROGRESS
             await self._update_document_status(document.document_id, status)
             
             text_content = await self._extract_text_optimized(file_content, document.file_type)
             
             if not text_content:
-                raise ValueError("No text content extracted from document")
+                error_msg = f"Could not extract any text from the document '{document.original_name}'. The file might be corrupted, password-protected, or an image-only document (e.g., a scanned PDF)."
+                if document.file_type == "application/pdf":
+                    error_msg += " For scanned PDFs, an OCR tool is required to extract text, which is not enabled by default."
+                raise ValueError(error_msg)
             
             status.steps[0].status = ProcessingStepStatus.COMPLETED
             status.progress = 25
             await self._update_document_status(document.document_id, status)
             logger.info(f"📖 Text extraction completed: {len(text_content)} characters")
             
-            # Step 2: Semantic Chunking
             status.steps[1].status = ProcessingStepStatus.IN_PROGRESS
             await self._update_document_status(document.document_id, status)
 
@@ -123,12 +167,13 @@ class DocumentProcessingService:
             await self._update_document_status(document.document_id, status)
             logger.info(f"✂️ Created {len(chunks)} optimized chunks")
             
-            # Step 3 & 4: Batch Embedding and DB Indexing
             status.steps[2].status = ProcessingStepStatus.IN_PROGRESS
             status.steps[3].status = ProcessingStepStatus.IN_PROGRESS
             await self._update_document_status(document.document_id, status)
 
+            logger.info(f"-> Starting batch processing for {len(chunks)} chunks...")
             await self._process_chunks_batch(chunks, document, db)
+            logger.info("-> Finished batch processing successfully.")
             
             status.steps[2].status = ProcessingStepStatus.COMPLETED
             status.progress = 75
@@ -138,27 +183,22 @@ class DocumentProcessingService:
             status.progress = 99
             await self._update_document_status(document.document_id, status)
 
-            # Final DB Update
-            db_document = db.query(Document).filter(Document.document_id == document.document_id).first()
-            if db_document:
-                db_document.status = "ready"
-                db_document.total_chunks = len(chunks)
-                db_document.embeddings_generated = True
-                db.commit()
+            document.status = "ready"
+            document.total_chunks = len(chunks)
+            document.embeddings_generated = True
+            db.commit()
             
             processing_time = time.time() - processing_start_time
-            log_agent_trace("document_processor", "processing_complete", {"document_id": str(document.document_id), "chunks_created": len(chunks), "ocr_applied": False, "processing_time": processing_time})
+            log_agent_trace("document_processor", "processing_complete", {"document_id": str(document.document_id), "chunks_created": len(chunks), "ocr_applied": True, "processing_time": processing_time})
             logger.info(f"✅ Successfully processed document {document.document_id} in {processing_time:.2f}s")
             
         except Exception as e:
             processing_time = time.time() - processing_start_time
             logger.error(f"❌ Error processing document {document.document_id} after {processing_time:.2f}s: {e}", exc_info=True)
             
-            db_document = db.query(Document).filter(Document.document_id == document.document_id).first()
-            if db_document:
-                db_document.status = "error"
-                db_document.error_message = str(e)
-                db.commit()
+            document.status = "error"
+            document.error_message = str(e)
+            db.commit()
             
             status.status = "error"
             status.error_message = str(e)
@@ -190,21 +230,48 @@ class DocumentProcessingService:
         
         return await loop.run_in_executor(self.executor, extract_text)
     
+    # --- REPLACE THIS ENTIRE FUNCTION ---
     def _extract_pdf_optimized(self, file_content: bytes) -> str:
+        # --- First, try standard text extraction ---
         try:
             pdf_file = io.BytesIO(file_content)
             pdf_reader = PyPDF2.PdfReader(pdf_file)
             
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 page_futures = [executor.submit(self._extract_page_text, page, i) for i, page in enumerate(pdf_reader.pages)]
-                pages_text = [future.result() for future in concurrent.futures.as_completed(page_futures)]
-                
-            pages_text.sort()
-            return "\n\n".join([text for _, text in pages_text if text])
+                pages_text_tuples = [future.result() for future in concurrent.futures.as_completed(page_futures)]
+            
+            pages_text_tuples.sort() # Sort by page number
+            text_content = "\n\n".join([text for _, text in pages_text_tuples if text])
+            
+            if text_content.strip():
+                logger.info("Successfully extracted digital text from PDF.")
+                return text_content
         except Exception as e:
-            logger.error(f"Error extracting PDF text: {e}")
+            logger.warning(f"PyPDF2 failed to extract text, will attempt OCR. Reason: {e}")
+
+        # --- If standard extraction fails or yields no text, perform OCR ---
+        logger.info("No digital text found. Attempting OCR with Tesseract...")
+        try:
+            # --- ADD THIS DEBUG LINE ---
+            print(f"DEBUG: Application is using Tesseract path: '{settings.tesseract_path}'")
+
+            if settings.tesseract_path and os.path.exists(settings.tesseract_path):
+                pytesseract.pytesseract.tesseract_cmd = settings.tesseract_path
+
+            images = convert_from_bytes(file_content)
+            ocr_texts = []
+            for i, image in enumerate(images):
+                page_text = pytesseract.image_to_string(image)
+                ocr_texts.append(f"--- Page {i + 1} ---\n\n{page_text}")
+            
+            full_text = "\n\n".join(ocr_texts)
+            logger.info(f"Successfully extracted text via OCR from {len(images)} pages.")
+            return full_text
+        except Exception as ocr_error:
+            logger.error(f"OCR extraction failed: {ocr_error}", exc_info=True)
             return ""
-    
+
     def _extract_page_text(self, page, page_num: int) -> tuple:
         try:
             page_text = page.extract_text()
@@ -227,7 +294,6 @@ class DocumentProcessingService:
             return ""
 
     async def _create_chunks_optimized(self, text: str) -> List[Dict[str, Any]]:
-        # This is a simplified chunking strategy. More sophisticated methods can be used.
         from langchain.text_splitter import RecursiveCharacterTextSplitter
         
         text_splitter = RecursiveCharacterTextSplitter(
@@ -256,6 +322,7 @@ class DocumentProcessingService:
         try:
             batch_size = 32
             all_embeddings = []
+            logger.info("--> Starting embedding generation...")
             for i in range(0, len(chunk_texts), batch_size):
                 batch_texts = chunk_texts[i:i + batch_size]
                 batch_embeddings = self.embedding_model.encode(
@@ -266,10 +333,12 @@ class DocumentProcessingService:
                     normalize_embeddings=True
                 )
                 all_embeddings.extend(batch_embeddings)
+            logger.info(f"--> Finished embedding generation. Total embeddings: {len(all_embeddings)}")
         except Exception as e:
-            logger.error(f"❌ Batch embedding generation failed: {e}")
+            logger.error(f"❌ Batch embedding generation failed: {e}", exc_info=True)
             raise
 
+        logger.info("--> Starting vector storage...")
         storage_tasks = []
         for i, chunk in enumerate(chunks):
             metadata = {
@@ -287,6 +356,7 @@ class DocumentProcessingService:
             )
         
         vector_ids = await asyncio.gather(*storage_tasks)
+        logger.info(f"--> Finished vector storage. Total vectors stored: {len(vector_ids)}")
 
         db_chunks = []
         for i, chunk_data in enumerate(chunks):

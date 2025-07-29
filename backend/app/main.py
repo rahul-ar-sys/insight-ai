@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
@@ -7,12 +9,46 @@ import uvicorn
 
 from .core.config import settings
 from .core.logging import logger, setup_logging
-from .core.database import create_tables
+from .core.database import create_tables, close_redis
 from .api import workspaces, query, knowledge, analytics, reasoning, auth
 from .models.schemas import ErrorResponse
+from .dependencies import get_document_processing_service
+from .services.knowledge_extraction import get_knowledge_extraction_service, get_topic_modeling_service
+from .dependencies import get_vector_store_service
 
 # Setup logging
 setup_logging("INFO" if not settings.debug else "DEBUG")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handles application startup and shutdown events."""
+    logger.info(f"Starting {settings.app_name} v{settings.version}")
+    
+    # Initialize database tables
+    create_tables()
+    logger.info("Database initialized successfully")
+
+    # Connect to vector store and load all heavy ML models concurrently at startup
+    logger.info("Connecting to services and loading ML models...")
+    doc_service = get_document_processing_service()
+    knowledge_service = get_knowledge_extraction_service()
+    topic_service = get_topic_modeling_service()
+    vector_service = get_vector_store_service()
+    await asyncio.gather(
+        vector_service.connect(),
+        doc_service.load_models(),
+        knowledge_service.load_models(),
+        topic_service.load_models()
+    )
+    logger.info("✅ All services connected and ML models loaded successfully.")
+    
+    yield
+    
+    # Code to run on shutdown
+    logger.info("Shutting down application")
+    await close_redis()
+
 
 # Create FastAPI app
 app = FastAPI(
@@ -21,6 +57,7 @@ app = FastAPI(
     description="An advanced agentic AI platform for intelligent question-answering based on user documents",
     docs_url="/docs" if settings.debug else None,
     redoc_url="/redoc" if settings.debug else None,
+    lifespan=lifespan,
 )
 
 # CORS middleware
@@ -94,32 +131,6 @@ app.include_router(query.router, prefix=settings.api_v1_prefix)
 app.include_router(knowledge.router, prefix=settings.api_v1_prefix)
 app.include_router(analytics.router, prefix=settings.api_v1_prefix)
 app.include_router(reasoning.router, prefix=settings.api_v1_prefix)
-
-
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    logger.info(f"Starting {settings.app_name} v{settings.version}")
-    
-    # Initialize database
-    try:
-        create_tables()
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
-        raise
-    
-    logger.info(f"Server starting on {settings.host}:{settings.port}")
-
-
-# Shutdown event
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Shutting down application")
-    
-    # Close database connections
-    from .core.database import close_redis
-    await close_redis()
 
 
 # Root endpoint

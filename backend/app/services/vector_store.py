@@ -2,15 +2,23 @@ import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from abc import ABC, abstractmethod
 import uuid
+import asyncio
 import json
 
 from ..core.config import settings
 from ..core.logging import logger
 
+_vector_store_instance = None
+
 
 class VectorStoreInterface(ABC):
     """Abstract interface for vector database operations"""
     
+    @abstractmethod
+    async def connect(self):
+        """Connect to the vector store if needed."""
+        pass
+
     @abstractmethod
     async def store_embedding(
         self,
@@ -45,21 +53,27 @@ class ChromaVectorStore(VectorStoreInterface):
 
     def __init__(self):
         self.client = None
-        self._initialize_client()
 
-    def _initialize_client(self):
+    async def connect(self):
+        """Initializes the ChromaDB client. To be called at application startup."""
+        if self.client:
+            logger.info("ChromaDB client already initialized.")
+            return
         try:
             import chromadb
             self.client = chromadb.HttpClient(host=settings.chroma_host, port=settings.chroma_port)
-            self.client.heartbeat()
+            await asyncio.to_thread(self.client.heartbeat)
             logger.info(f"ChromaDB client initialized successfully. Host: {settings.chroma_host}, Port: {settings.chroma_port}")
         except ImportError:
             logger.error("ChromaDB library (chromadb-client) not available. Please install it.")
         except Exception as e:
             logger.error(f"Failed to initialize ChromaDB client: {e}")
+            self.client = None
+            raise
 
     def _get_or_create_collection(self, workspace_id: str):
-        if not self.client: raise Exception("ChromaDB client not initialized")
+        if not self.client:
+            raise Exception("ChromaDB client not initialized. The service may have failed to connect at startup.")
         collection_name = f"workspace-{str(workspace_id).replace('-', '')}"
         return self.client.get_or_create_collection(name=collection_name)
 
@@ -140,6 +154,11 @@ class InMemoryVectorStore(VectorStoreInterface):
     def __init__(self):
         self.vectors = {}
         self.document_vectors = {}
+
+    async def connect(self):
+        """In-memory store does not need to connect."""
+        logger.debug("In-memory vector store connect() called. No action needed.")
+        pass
     
     async def store_embedding(self, text: str, embedding: np.ndarray, metadata: Dict[str, Any]) -> str:
         vector_id = str(uuid.uuid4())
@@ -203,6 +222,10 @@ class VectorStoreService:
         else:
             logger.warning(f"Unknown or unconfigured vector_db_type '{settings.vector_db_type}'. Using in-memory vector store as fallback.")
             return InMemoryVectorStore()
+
+    async def connect(self):
+        """Connects the underlying vector store implementation."""
+        await self.store.connect()
     
     async def store_embedding(self, text: str, embedding: np.ndarray, metadata: Dict[str, Any]) -> str:
         return await self.store.store_embedding(text, embedding, metadata)
@@ -215,3 +238,5 @@ class VectorStoreService:
     
     async def delete_document_embeddings(self, document_id: str, **kwargs) -> bool:
         return await self.store.delete_document_embeddings(document_id, **kwargs)
+
+

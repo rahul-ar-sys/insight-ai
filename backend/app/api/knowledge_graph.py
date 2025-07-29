@@ -13,14 +13,10 @@ from ..models.schemas import (
     KnowledgeGraphResponse, KnowledgeEntityResponse, KnowledgeRelationshipResponse,
     TopicModelingResponse, EntitySearchResponse
 )
-from ..services.knowledge_extraction import KnowledgeExtractionService, TopicModelingService
+from ..services.knowledge_extraction import KnowledgeExtractionService, TopicModelingService, get_knowledge_extraction_service, get_topic_modeling_service
 from ..services.analytics import AnalyticsService
 
-router = APIRouter(prefix="/api/v1/knowledge", tags=["Knowledge Graph"])
-
-knowledge_service = KnowledgeExtractionService()
-topic_service = TopicModelingService()
-analytics_service = AnalyticsService()
+router = APIRouter(prefix="/knowledge", tags=["Knowledge Graph"])
 
 
 @router.get("/{workspace_id}/graph", response_model=KnowledgeGraphResponse)
@@ -141,6 +137,7 @@ async def get_knowledge_graph(
 async def extract_knowledge(
     workspace_id: str,
     background_tasks: BackgroundTasks,
+    knowledge_service: KnowledgeExtractionService = Depends(get_knowledge_extraction_service),
     force_reprocessing: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
@@ -296,6 +293,7 @@ async def search_entities(
 async def get_workspace_topics(
     workspace_id: str,
     background_tasks: BackgroundTasks,
+    topic_service: TopicModelingService = Depends(get_topic_modeling_service),
     refresh: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)

@@ -41,15 +41,12 @@ class Settings(BaseSettings):
     
     # Vector Database Configuration
     vector_db_type: str = "chroma"  # or "pinecone", "weaviate" 
-    pinecone_api_key: Optional[str] = None
-    pinecone_environment: str = "us-west1-gcp"
-    weaviate_url: Optional[str] = None
-    weaviate_api_key: Optional[str] = None
+    
     
     # LLM Configuration
-    openai_api_key: Optional[str] = None
+    
     google_api_key: Optional[str] = None
-    default_llm: str = "openai"  # or "google"
+    default_llm: str = "google" 
     
     # Cloud Storage Configuration
     storage_type: str = "gcs"  # or "s3"
@@ -68,9 +65,10 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     
     # OCR Configuration
-    google_vision_api_key: Optional[str] = None
-    tesseract_path: Optional[str] = None
-    
+    # In app/core/config.py
+    tesseract_path: Optional[str] = "C:/Program Files/Tesseract-OCR/tesseract.exe"
+
+
     # External APIs
     tavily_api_key: Optional[str] = None
     
@@ -78,7 +76,7 @@ class Settings(BaseSettings):
     max_file_size_mb: int = 100
     chunk_size: int = 1000
     chunk_overlap: int = 200
-    embedding_model: str = "all-MiniLM-L6-v2"
+    embedding_model: str = "E:/insight_ai/backend/all-MiniLM-L6-v2"
     
     # Session Configuration
     session_timeout_minutes: int = 60
@@ -89,12 +87,11 @@ class Settings(BaseSettings):
     
     # ChromaDB Configuration
     chroma_host: str = "localhost"
-    chroma_port: int = 8001
+    chroma_port: int = 8000
     chroma_persist_directory: str = "./data/chroma"
     chroma_use_persistent_client: bool = True
     
-    # Pinecone Index Name
-    pinecone_index_name: str = "insight-ai-index"
+   
     
     class Config:
         env_file = ".env"

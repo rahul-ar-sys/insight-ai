@@ -13,17 +13,26 @@ from ..models.database import (
 )
 from ..models.schemas import KnowledgeEntityCreate, KnowledgeRelationshipCreate
 from .vector_store import VectorStoreService
+from ..dependencies import get_vector_store_service
+
+
+_knowledge_service_instance = None
+_topic_service_instance = None
 
 
 class KnowledgeExtractionService:
     """Service for extracting entities and relationships from documents"""
     
-    def __init__(self):
+    def __init__(self, vector_service: VectorStoreService):
         self.nlp = None
-        self.vector_service = VectorStoreService()
-        self._load_nlp_model()
+        self.vector_service = vector_service
     
-    def _load_nlp_model(self):
+    async def load_models(self):
+        """Asynchronously loads the spaCy model."""
+        if self.nlp: return
+        await asyncio.to_thread(self._load_nlp_model_sync)
+    
+    def _load_nlp_model_sync(self):
         """Load spaCy NLP model"""
         try:
             # Try to load English model
@@ -373,9 +382,13 @@ class TopicModelingService:
     
     def __init__(self):
         self.topic_model = None
-        self._initialize_topic_model()
     
-    def _initialize_topic_model(self):
+    async def load_models(self):
+        """Asynchronously loads the BERTopic model."""
+        if self.topic_model: return
+        await asyncio.to_thread(self._initialize_topic_model_sync)
+    
+    def _initialize_topic_model_sync(self):
         """Initialize BERTopic model"""
         try:
             from bertopic import BERTopic
@@ -452,3 +465,20 @@ class TopicModelingService:
         except Exception as e:
             logger.error(f"Error extracting topics: {e}")
             return {"topics": [], "error": str(e)}
+
+
+def get_knowledge_extraction_service():
+    """Dependency function to get the singleton instance of the KnowledgeExtractionService."""
+    global _knowledge_service_instance
+    if _knowledge_service_instance is None:
+        vector_service = get_vector_store_service()
+        _knowledge_service_instance = KnowledgeExtractionService(vector_service=vector_service)
+    return _knowledge_service_instance
+
+
+def get_topic_modeling_service():
+    """Dependency function to get the singleton instance of the TopicModelingService."""
+    global _topic_service_instance
+    if _topic_service_instance is None:
+        _topic_service_instance = TopicModelingService()
+    return _topic_service_instance
