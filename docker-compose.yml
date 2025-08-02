@@ -1,0 +1,146 @@
+# Complete and Corrected Docker Compose for Insight AI Development
+version: '3.8'
+
+services:
+  # Backend Service (Your Python App)
+  backend:
+    build:
+      context: ./backend
+    container_name: insight-ai-backend
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend:/app
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_healthy
+      ollama: # CHANGED: Added dependency on Ollama
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Frontend Service (Streamlit App)
+  frontend:
+    build:
+      context: ./frontend
+    container_name: insight-ai-frontend
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # Ollama Open-Source LLM Service
+  ollama:
+      image: ollama/ollama
+      container_name: insight-ai-ollama
+      ports:
+        - "11434:11434"
+      volumes:
+        - ollama_data:/root/.ollama
+      restart: unless-stopped
+      healthcheck:
+        test: ["CMD", "ollama", "list"]
+        interval: 20s
+        timeout: 10s
+        retries: 5
+      # --- For GPU Acceleration (Highly Recommended) ---
+      # deploy:
+      #   resources:
+      #     reservations:
+      #       devices:
+      #         - driver: nvidia
+      #           count: 1
+      #           capabilities: [gpu]
+
+  # Helper service to download the model on first start
+  init-ollama:
+      image: curlimages/curl:latest
+      container_name: insight-ai-init-ollama
+      entrypoint: |
+        sh -c '
+          echo "Waiting for Ollama to be ready..."
+          while ! curl -s http://ollama:11434/api/tags > /dev/null; do
+            sleep 1
+          done
+          echo "Ollama is ready. Pulling model: llama3:8b"
+          curl http://ollama:11434/api/pull -d ''{"name": "llama3:8b"}''
+          echo "Model pull complete."
+        '
+      depends_on:
+        - ollama
+    
+  # PostgreSQL Database Service
+  postgres:
+    image: postgres:15-alpine
+    container_name: insight-ai-postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: mydatabase
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d mydatabase"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: insight-ai-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --appendfsync everysec
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ChromaDB Vector Store
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: insight-ai-chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+      - PERSIST_DIRECTORY=/chroma/chroma
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  ollama_data: # CHANGED: Added ollama_data definition
+    driver: local
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  chroma_data:
+    driver: local
+
+networks:
+  default:
+    name: insight-ai-network

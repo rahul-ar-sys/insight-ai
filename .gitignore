@@ -1,5 +1,4 @@
-# Exclude frontend directory
-frontend/
+
 
 
 # Exclude logs
@@ -57,3 +56,5 @@ Thumbs.db
 !SETUP_GUIDE.md
 !README.md
 !.gitignore
+
+.streamlit/

@@ -8,7 +8,8 @@ import json
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
-from langchain_google_genai import ChatGoogleGenerativeAI
+# --- CHANGE: Import ChatOpenAI instead of ChatGoogleGenerativeAI ---
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
 from ..core.config import settings
@@ -16,7 +17,7 @@ from ..core.logging import logger
 from ..dependencies import get_vector_store_service
 
 
-# --- Input Schemas for Tools ---
+# --- Input Schemas for Tools (No changes here) ---
 
 class DocumentRetrieverInput(BaseModel):
     query: str = Field(description="Search query for document retrieval")
@@ -39,9 +40,10 @@ class ResponseSynthesizerInput(BaseModel):
     synthesis_data: Dict[str, Any] = Field(description="All data to synthesize into a response")
 
 
-# --- Tool Definitions ---
+# --- Tool Definitions (Only ResponseSynthesizerTool is changed) ---
 
 class DocumentRetrieverTool(BaseTool):
+    # ... (no changes in this class)
     name: str = "document_retriever"
     description: str = "Retrieves relevant document chunks based on semantic similarity"
     args_schema: Type[BaseModel] = DocumentRetrieverInput
@@ -72,8 +74,7 @@ class DocumentRetrieverTool(BaseTool):
             results = await self._get_vector_service().search_similar(
                 query_embedding=query_embedding, limit=max_results, filters={"workspace_id": workspace_id}
             )
-            # The vector store returns results with a "text" key. 
-            # The agent orchestrator expects a "content" key. We perform the mapping here.
+            
             for r in results:
                 r['content'] = r.get('text', '')
             return results
@@ -86,6 +87,7 @@ class DocumentRetrieverTool(BaseTool):
 
 
 class WebSearchTool(BaseTool):
+    # ... (no changes in this class)
     name: str = "web_search"
     description: str = "Searches the web for additional information and recent updates"
     args_schema: Type[BaseModel] = WebSearchInput
@@ -116,6 +118,7 @@ class WebSearchTool(BaseTool):
 
 
 class ReasoningEngineTool(BaseTool):
+    # ... (no changes in this class)
     name: str = "reasoning_engine"
     description: str = "Analyzes information and performs logical reasoning (placeholder)"
     args_schema: Type[BaseModel] = ReasoningEngineInput
@@ -128,6 +131,7 @@ class ReasoningEngineTool(BaseTool):
 
 
 class ContradictionDetectorTool(BaseTool):
+    # ... (no changes in this class)
     name: str = "contradiction_detector"
     description: str = "Detects potential contradictions in information (placeholder)"
     args_schema: Type[BaseModel] = ContradictionDetectorInput
@@ -143,22 +147,25 @@ class ResponseSynthesizerTool(BaseTool):
     name: str = "response_synthesizer"
     description: str = "Synthesizes information from multiple sources into a comprehensive response"
     args_schema: Type[BaseModel] = ResponseSynthesizerInput
-    
+
     _llm = None
 
+    # --- CHANGE: Updated to initialize Ollama ---
     def _get_llm(self):
-        """Lazy initialization of the LLM to ensure settings are loaded."""
+        """Lazy initialization of the LLM to connect to the Ollama service."""
         if self._llm is None:
-            if not settings.google_api_key:
-                raise ValueError("GOOGLE_API_KEY not found in environment settings.")
+            if not settings.ollama_base_url:
+                raise ValueError("OLLAMA_BASE_URL not found in environment settings.")
             
-            self._llm = ChatGoogleGenerativeAI(
-                model="gemini-1.5-flash",
+            self._llm = ChatOpenAI(
+                model=settings.ollama_model, # e.g., 'llama3:8b'
+                base_url=settings.ollama_base_url, # e.g., 'http://ollama:11434/v1'
+                api_key="ollama", # Required by the library, but not used by Ollama
                 temperature=0.2,
-                google_api_key=settings.google_api_key
             )
         return self._llm
 
+    # --- No changes needed in the methods below ---
     async def _arun(self, synthesis_data: Dict[str, Any]) -> Dict[str, Any]:
         try:
             query = synthesis_data.get("query", "")
@@ -203,11 +210,10 @@ class ResponseSynthesizerTool(BaseTool):
     def _run(self, synthesis_data: Dict[str, Any]) -> Dict[str, Any]:
         return asyncio.run(self._arun(synthesis_data))
 
-# --- Tool Registry to manage all tools ---
+# --- Tool Registry to manage all tools (No changes here) ---
 
 class ToolRegistry:
-    """Registry for managing available tools"""
-    
+    # ... (no changes in this class)
     def __init__(self):
         self.tools = {
             "document_retriever": DocumentRetrieverTool(),
@@ -222,4 +228,3 @@ class ToolRegistry:
     
     def get_available_tools(self) -> List[BaseTool]:
         return list(self.tools.values())
-

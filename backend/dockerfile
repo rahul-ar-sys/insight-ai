@@ -1,0 +1,24 @@
+# Use a full Debian-based image to get standard package managers
+FROM python:3.10-bullseye
+
+# 1. Install Tesseract OCR and other system dependencies
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    libtesseract-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set the working directory
+WORKDIR /app
+
+# 2. Pre-download the sentence-transformer model
+# This ensures the model is baked into the image and not downloaded at runtime.
+# Add 'sentence-transformers' to your requirements.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+# Copy the rest of your application code
+COPY . .
+
+# Command to run your application
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5000"]
