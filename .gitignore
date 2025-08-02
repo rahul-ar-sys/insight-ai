@@ -22,9 +22,7 @@ __pycache__/
 *.pyc
 
 # Exclude environment files
-.env
 .venv
-env/
 venv/
 ENV/
 

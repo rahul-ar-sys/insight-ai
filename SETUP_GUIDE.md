@@ -101,7 +101,7 @@ If you prefer to use Git, you can clone the repository instead of downloading th
 1.  **Prerequisite:** Ensure **Git** is installed on your machine.
 2.  **Clone the repository:**
     ```bash
-    git clone <your-repository-url>
+    git clone https://github.com/rahul-ar-sys/insight-ai
     ```
 3.  **Navigate into the directory:**
     ```bash
